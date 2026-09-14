@@ -1,81 +1,82 @@
 import requests
 from bs4 import BeautifulSoup
 import logging
+import urllib.parse
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-# 언론사 OID 매핑
-MEDIA_OIDS = {
+# 언론사 구글 검색 사이트 매핑
+MEDIA_SITES = {
     'left': {
-        '한겨레': '028',
-        '경향신문': '032',
-        '오마이뉴스': '047'
+        '한겨레': 'hani.co.kr',
+        '경향신문': 'khan.co.kr',
+        '오마이뉴스': 'ohmynews.com'
     },
     'right': {
-        '조선일보': '023',
-        '중앙일보': '025',
-        '동아일보': '020'
+        '조선일보': 'chosun.com',
+        '중앙일보': 'joongang.co.kr',
+        '동아일보': 'donga.com'
     }
 }
 
-def get_articles_by_oid(keyword: str, oid: str, max_articles: int = 3) -> List[Dict[str, str]]:
-    """특정 언론사(oid)에서 키워드로 최신 기사를 검색하고 제목/본문을 가져옵니다."""
-    url = f"https://search.naver.com/search.naver?where=news&query={keyword}&pd=1&sort=1&ds=&de=&nso=so:dd,p:1w,a:all&mynews=1&office_type=1&office_section_code=1&news_office_checked={oid}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+def get_article_by_site(keyword: str, site: str, max_articles: int = 1) -> List[Dict[str, str]]:
+    """Google News RSS를 통해 특정 사이트에서 키워드 검색 후 최신 기사를 가져옵니다."""
+    query = f"{keyword} site:{site}"
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
     
     articles = []
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.content, 'xml')
         
-        # 네이버 뉴스 검색 결과 리스트
-        news_items = soup.select('.news_area')
-        
-        for item in news_items:
+        items = soup.find_all('item')
+        for item in items:
             if len(articles) >= max_articles:
                 break
                 
-            title_tag = item.select_one('.news_tit')
-            desc_tag = item.select_one('.api_txt_lines.dsc_txt_wrap')
+            title = item.title.text if item.title else ''
+            # 구글 뉴스는 title 끝에 " - 언론사명" 이 붙는 경우가 많음
+            if " - " in title:
+                title = title.rsplit(" - ", 1)[0]
+                
+            link = item.link.text if item.link else ''
+            desc = item.description.text if item.description else title
             
-            if title_tag and desc_tag:
-                title = title_tag.get('title') or title_tag.text
-                desc = desc_tag.text
-                link = title_tag.get('href')
-                
-                articles.append({
-                    'title': title.strip(),
-                    'content': desc.strip(),
-                    'link': link
-                })
-                
+            # HTML 태그 제거
+            desc_soup = BeautifulSoup(desc, 'html.parser')
+            clean_desc = desc_soup.get_text(separator=' ', strip=True)
+            
+            articles.append({
+                'title': title.strip(),
+                'content': clean_desc,
+                'link': link
+            })
     except Exception as e:
-        logger.error(f"Error scraping articles for oid {oid}: {e}")
+        logger.error(f"Error scraping articles for site {site}: {e}")
         
     return articles
 
 def scrape_news(keyword: str) -> Dict[str, List[Dict[str, str]]]:
     """좌파 및 우파 언론사에서 키워드에 대한 기사를 수집합니다."""
-    logger.info(f"Scraping news for keyword: {keyword}")
+    logger.info(f"Scraping news for keyword: {keyword} using Google News RSS")
     results = {'left': [], 'right': []}
     
     # 좌파 매체 수집
-    for media_name, oid in MEDIA_OIDS['left'].items():
+    for media_name, site in MEDIA_SITES['left'].items():
         logger.info(f"Scraping {media_name} (Left)...")
-        articles = get_articles_by_oid(keyword, oid, max_articles=1)
+        articles = get_article_by_site(keyword, site, max_articles=1)
         if articles:
             article = articles[0]
             article['media'] = media_name
             results['left'].append(article)
             
     # 우파 매체 수집
-    for media_name, oid in MEDIA_OIDS['right'].items():
+    for media_name, site in MEDIA_SITES['right'].items():
         logger.info(f"Scraping {media_name} (Right)...")
-        articles = get_articles_by_oid(keyword, oid, max_articles=1)
+        articles = get_article_by_site(keyword, site, max_articles=1)
         if articles:
             article = articles[0]
             article['media'] = media_name
@@ -92,4 +93,4 @@ if __name__ == "__main__":
         for side, side_articles in data.items():
             print(f"--- {side.upper()} ---")
             for a in side_articles:
-                print(f"[{a['media']}] {a['title']}\n{a['content']}\n")
+                print(f"[{a['media']}] {a['title']}\n{a['content'][:100]}...\n")

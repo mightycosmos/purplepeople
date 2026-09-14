@@ -14,9 +14,16 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class CardNews(BaseModel):
-    bg_color: str = Field(description="Background color for the card: 'purple', 'blue', or 'red'.")
-    title: List[str] = Field(description="Core summary title, exactly 2 strings (2 lines).", min_length=2, max_length=2)
-    details: List[str] = Field(description="Detailed summary points for the bottom section, 3 to 4 strings.", min_length=3, max_length=4)
+    bg_color: str = Field(description="Background color: 'black', 'light', or 'purple'.")
+    card_type: str = Field(description="Type of card: 'cover', 'news', or 'closing'.")
+    
+    # For 'cover' and 'closing'
+    content: str = Field(default="", description="Text for cover or closing card.")
+    
+    # For 'news'
+    media: str = Field(default="", description="Name of the media outlet.")
+    title: str = Field(default="", description="Title of the news article.")
+    desc: str = Field(default="", description="Explanation or summary of the agenda.")
 
 class CardNewsList(BaseModel):
     cards: List[CardNews] = Field(description="List of exactly 8 cards.", min_length=8, max_length=8)
@@ -27,7 +34,6 @@ def generate_script(keyword: str, news_data: Dict[str, List[Dict[str, str]]]) ->
     """
     logger.info("Generating script with LLM...")
     
-    # 좌/우파 뉴스 데이터를 프롬프트용 텍스트로 변환
     left_news_text = "\n".join([f"[{n['media']}] {n['title']}: {n['content']}" for n in news_data.get('left', [])])
     right_news_text = "\n".join([f"[{n['media']}] {n['title']}: {n['content']}" for n in news_data.get('right', [])])
     
@@ -39,19 +45,18 @@ def generate_script(keyword: str, news_data: Dict[str, List[Dict[str, str]]]) ->
     각 카드는 아래의 규칙을 엄격하게 따라야 합니다.
     
     [카드 구성 규칙]
-    Card 1 (bg_color: "purple"): 주제 '{keyword}'에 대한 흥미를 끄는 강렬한 도입부 (후킹 멘트)
-    Card 2 (bg_color: "blue"): 좌파 기사 1 요약 및 핵심 논조
-    Card 3 (bg_color: "blue"): 좌파 기사 2 요약 및 핵심 논조
-    Card 4 (bg_color: "blue"): 좌파 기사 3 요약 및 핵심 논조
-    Card 5 (bg_color: "red"): 우파 기사 1 요약 및 핵심 논조
-    Card 6 (bg_color: "red"): 우파 기사 2 요약 및 핵심 논조
-    Card 7 (bg_color: "red"): 우파 기사 3 요약 및 핵심 논조
-    Card 8 (bg_color: "purple"): "여러분의 생각은 어떠신가요?"와 같은 질문 형태의 결론 및 CTA 문구
+    Card 1 (bg_color: "black", card_type: "cover"): 주제 '{keyword}'에 대한 흥미를 끄는 강렬한 도입부 (후킹 멘트를 content에 작성)
+    Card 2 (bg_color: "light", card_type: "news"): 좌파 언론사의 의제 1 (media, title, desc 작성)
+    Card 3 (bg_color: "light", card_type: "news"): 좌파 언론사의 의제 2 (media, title, desc 작성)
+    Card 4 (bg_color: "light", card_type: "news"): 좌파 언론사의 의제 3 (media, title, desc 작성)
+    Card 5 (bg_color: "light", card_type: "news"): 우파 언론사의 의제 1 (media, title, desc 작성)
+    Card 6 (bg_color: "light", card_type: "news"): 우파 언론사의 의제 2 (media, title, desc 작성)
+    Card 7 (bg_color: "light", card_type: "news"): 우파 언론사의 의제 3 (media, title, desc 작성)
+    Card 8 (bg_color: "purple", card_type: "closing"): content는 정확히 아래 두 줄 고정
+    편향이 느껴지시나요?
+    여러분의 생각을 적어주세요
     
-    [데이터 형식 규칙]
-    - title: 반드시 두 개의 문자열을 리스트로 반환하여 2줄로 표현될 수 있도록 하세요. 
-    - details: 3~4개의 문자열을 리스트로 반환하여 상세 내용을 표현하세요.
-    - bg_color: 반드시 "purple", "blue", "red" 중 하나를 사용하세요.
+    주의: 기사가 부족하더라도 상상력을 발휘하여 주제에 맞는 좌/우파 논조를 생성해 반드시 8장을 채워야 합니다.
     """
     
     user_prompt = f"""
@@ -61,6 +66,8 @@ def generate_script(keyword: str, news_data: Dict[str, List[Dict[str, str]]]) ->
     [우파 매체 뉴스]
     {right_news_text}
     """
+    
+    closing_text = "편향이 느껴지시나요?\n여러분의 생각을 적어주세요"
     
     try:
         completion = client.beta.chat.completions.parse(
@@ -73,7 +80,18 @@ def generate_script(keyword: str, news_data: Dict[str, List[Dict[str, str]]]) ->
         )
         
         result = completion.choices[0].message.parsed
-        return [card.model_dump() for card in result.cards]
+        cards = [card.model_dump() for card in result.cards]
+        # 마지막 카드 문구는 항상 고정
+        if cards:
+            cards[-1] = {
+                "bg_color": "purple",
+                "card_type": "closing",
+                "content": closing_text,
+                "media": "",
+                "title": "",
+                "desc": "",
+            }
+        return cards
         
     except Exception as e:
         logger.error(f"Error during LLM processing: {e}")
@@ -87,3 +105,4 @@ if __name__ == "__main__":
     }
     script = generate_script("부동산", dummy_data)
     print(json.dumps(script, ensure_ascii=False, indent=2))
+

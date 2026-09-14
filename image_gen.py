@@ -28,11 +28,20 @@ def generate_images(script: list, output_dir: str = 'output') -> list:
             page = browser.new_page(viewport={'width': 1080, 'height': 1080})
             
             for idx, card in enumerate(script):
+                # Card 2~4(Left), Card 5~7(Right)
+                side = ''
+                if card.get('card_type', 'news') == 'news':
+                    side = 'Left' if 1 <= idx <= 3 else 'Right' if 4 <= idx <= 6 else ''
+
                 # HTML 렌더링
                 html_content = template.render(
-                    bg_color=card.get('bg_color', 'purple'),
-                    title=card.get('title', []),
-                    details=card.get('details', [])
+                    bg_color=card.get('bg_color', 'light'),
+                    card_type=card.get('card_type', 'news'),
+                    content=card.get('content', ''),
+                    media=card.get('media', ''),
+                    title=card.get('title', ''),
+                    desc=card.get('desc', ''),
+                    side=side
                 )
                 
                 # 페이지 로드 및 스크린샷 캡처
@@ -58,9 +67,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     dummy_script = [
         {
-            "bg_color": "purple",
-            "title": ["부동산 가격 폭등", "서민들의 고통"],
-            "details": ["서울 집값이 사상 최고치를 경신했습니다.", "대출 규제로 인해 내 집 마련이 더욱 어려워지고 있습니다.", "오늘의 핫이슈를 살펴봅니다."]
+            "bg_color": "black",
+            "card_type": "cover",
+            "content": "대통령 지지율 급락, 도대체 왜?"
         }
     ]
     generate_images(dummy_script)
