@@ -22,45 +22,47 @@
 
     <div class="absolute left-[85px] right-0 top-[128px] h-[116px] bg-white flex items-center justify-between pl-[30px] pr-[38px]">
         <span class="wordmark font-black text-[62px] tracking-[-0.02em]" style="color: {{ bg }}">Purple People</span>
-        <span class="flex items-center gap-[24px]" style="color: {{ bg }}">
-            {% if side %}<span class="wordmark font-black text-[30px] tracking-[0.06em]">{{ side }}</span>{% endif %}
-            <span class="wordmark font-black text-[30px]">{{ "%02d"|format(page) }}</span>
+        {% if side %}
+        <span class="wordmark font-black text-[34px] tracking-[0.06em] flex items-center gap-[20px]" style="color: {{ bg }}">
+            <span>{{ side }}</span>
+            <span>{{ "%02d"|format(index) }}</span>
         </span>
+        {% endif %}
     </div>
 
 {% if kind == 'cover' %}
     <div class="absolute left-[90px] right-[70px] top-[400px]">
-        <h1 class="text-white font-extrabold text-[76px] leading-[1.32] tracking-[-0.035em] break-keep whitespace-pre-line">{{ headline }}</h1>
-        <div class="mt-[110px] text-white font-semibold text-[40px] leading-[1.9] tracking-[-0.02em] break-keep">
+        <h1 class="text-white font-extrabold text-[84px] leading-[1.3] tracking-[-0.035em] break-keep whitespace-pre-line">{{ headline }}</h1>
+        <div class="mt-[110px] text-white font-semibold text-[46px] leading-[1.85] tracking-[-0.02em] break-keep">
             {% for line in sublines %}<div>{{ line }}</div>{% endfor %}
         </div>
     </div>
 
 {% elif kind == 'closing' %}
     <div class="absolute left-[90px] right-[70px] top-[330px]">
-        <h1 class="text-white font-extrabold text-[62px] leading-[1.3] tracking-[-0.035em] break-keep">{{ title }}</h1>
+        <h1 class="text-white font-extrabold text-[68px] leading-[1.3] tracking-[-0.035em] break-keep">{{ title }}</h1>
         <div class="mt-[80px]">
-            <span class="wordmark font-black text-[36px] tracking-[0.06em]" style="color: #7FA8FF">Left</span>
-            <div class="mt-[24px] text-white font-semibold text-[38px] leading-[1.85] tracking-[-0.02em] break-keep">
+            <span class="wordmark font-black text-[44px] tracking-[0.06em]" style="color: #5AA9FF">Left</span>
+            <div class="mt-[24px] text-white font-semibold text-[42px] leading-[1.8] tracking-[-0.02em] break-keep">
                 {% for line in left_lines %}<div>{{ line }}</div>{% endfor %}
             </div>
         </div>
-        <div class="mt-[70px]">
-            <span class="wordmark font-black text-[36px] tracking-[0.06em]" style="color: #FF7B7B">Right</span>
-            <div class="mt-[24px] text-white font-semibold text-[38px] leading-[1.85] tracking-[-0.02em] break-keep">
+        <div class="mt-[64px]">
+            <span class="wordmark font-black text-[44px] tracking-[0.06em]" style="color: #FF5C5C">Right</span>
+            <div class="mt-[24px] text-white font-semibold text-[42px] leading-[1.8] tracking-[-0.02em] break-keep">
                 {% for line in right_lines %}<div>{{ line }}</div>{% endfor %}
             </div>
         </div>
     </div>
     <div class="absolute left-[90px] right-[90px] bottom-[110px]">
         <div class="h-[3px] bg-white/50 mb-[48px]"></div>
-        <div class="text-center text-white font-extrabold text-[44px] tracking-[-0.02em]">{{ footer }}</div>
+        <div class="text-center text-white font-extrabold text-[48px] tracking-[-0.02em]">{{ footer }}</div>
     </div>
 
 {% else %}
     <div id="body-block" class="absolute left-[90px] right-[70px] top-[350px] bottom-[120px]">
-        <h1 class="text-white font-extrabold text-[62px] leading-[1.3] tracking-[-0.035em] break-keep">{{ title }}</h1>
-        <div id="lines" class="mt-[70px] text-white font-semibold text-[40px] leading-[1.9] tracking-[-0.02em]">
+        <h1 class="text-white font-extrabold text-[68px] leading-[1.3] tracking-[-0.035em] break-keep">{{ title }}</h1>
+        <div id="lines" class="mt-[70px] text-white font-semibold text-[46px] leading-[1.85] tracking-[-0.02em]">
             {% for line in lines %}<div class="whitespace-nowrap">{{ line }}</div>{% endfor %}
         </div>
     </div>
@@ -70,8 +72,8 @@
             const lines = document.getElementById('lines');
             const overflows = () =>
                 [...lines.children].some((line) => line.scrollWidth > lines.clientWidth);
-            let size = 40;
-            while (overflows() && size > 26) {
+            let size = 46;
+            while (overflows() && size > 30) {
                 size -= 1;
                 lines.style.fontSize = size + 'px';
             }
