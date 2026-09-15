@@ -30,13 +30,11 @@ CLOSING_FOOTER = "여러분의 생각을 적어주세요"
 
 class NewsCard(BaseModel):
     title: str = Field(description="기사 제목처럼 쓴 우리만의 헤드라인. 언론사명 금지.")
-    sentences: List[str] = Field(
+    body: str = Field(
         description=(
-            "본문 문장 5개. 각 항목은 주어와 서술어를 갖춘 독립된 완결 문장이며 20~26자다. "
-            "한 문장을 여러 항목에 걸쳐 쪼개면 안 된다."
-        ),
-        min_length=5,
-        max_length=5,
+            "줄바꿈 없는 한 문단. 문장 3~5개가 자연스럽게 이어지며 전체 110~130자다. "
+            "줄을 직접 나누지 않는다."
+        )
     )
 
 
@@ -58,22 +56,19 @@ SYSTEM_PROMPT = """당신은 시사 카드뉴스 'Purple People'의 에디터입
 
 left_cards / right_cards (각 3장, 입력 순서 그대로)
 - title: 기사 제목처럼 압축한 우리만의 헤드라인. 12~18자. 마침표 없음.
-- sentences: 서로 다른 문장 5개. 긴 글을 5조각으로 자르는 것이 아니라, 문장 5개를 씁니다.
-  * 각 문장은 공백 포함 20~26자이며, 18자 미만이면 실패로 간주합니다.
-  * 각 문장은 반드시 서술어로 끝맺습니다. 명사나 조사로 끝나면 안 됩니다.
-    (…했다 / …된다 / …않다 / …이다 / …반발했다 처럼 끝내세요.)
-  * 문장 끝에 마침표를 찍지 않습니다.
-  * 다음 문장으로 넘어가야 말이 완성되는 문장은 금지입니다. 각 문장은 혼자서도 뜻이 통해야 합니다.
-  * 5개를 순서대로 읽으면 하나의 완결된 글이 됩니다.
-    1번은 무슨 일인지, 2~3번은 '이로 인해', '그러나', '반면' 같은 연결어로 배경과 반응을 잇고,
-    4~5번은 앞을 받아 쟁점이나 전망으로 닫습니다.
+- body: 줄바꿈 없는 한 문단으로 씁니다. 카드에서 줄은 알아서 나뉘므로 직접 끊지 마세요.
+  * 공백 포함 110~130자. 문장 3~5개가 모여 하나의 문단이 됩니다.
+  * 무슨 일이 있었는지로 시작해 '이로 인해', '그러나', '반면' 같은 연결어로 배경과 반응을 잇고,
+    쟁점이나 전망으로 닫습니다. 읽으면 처음부터 끝까지 한 호흡으로 흘러야 합니다.
+  * 문장과 문장 사이에는 마침표를 찍고, 맨 마지막 문장 끝에는 마침표를 찍지 않습니다.
+  * 짧은 문장을 툭툭 나열하지 마세요. 앞 문장을 받아 다음 문장이 이어지게 씁니다.
 
-  나쁜 예 (한 문장을 세 조각으로 쪼갬)
-    ["서울 중랑구에서 지적장애 가족이", "숨진 형을 발견하지 못해 충격을", "안겼으며 이는 사회의 복지"]
-  좋은 예 (항목마다 문장이 끝남)
-    ["서울 중랑구에서 지적장애 가족이 숨진 채 발견됐다",
-     "이웃도 가족도 몇 달째 이상을 알아채지 못했다",
-     "복지 사각지대가 또 한 번 그대로 드러난 셈이다"]
+  나쁜 예 (짧은 문장이 끊어져 나열됨)
+    "서울 중랑구에서 지적장애 가족이 숨진 채 발견됐다. 이웃도 몰랐다. 복지 사각지대가 드러났다"
+  좋은 예 (한 문단으로 이어짐)
+    "서울 중랑구의 한 빌라에서 지적장애를 가진 형제가 숨진 채 발견됐는데, 이웃도 가족도
+    몇 달째 이상을 알아채지 못했다. 기초생활수급 신청 이력조차 남아 있지 않아 행정의 손길이
+    닿지 않았고, 복지 사각지대를 어떻게 메울지가 다시 과제로 남았다"
 
 closing_left / closing_right
 - 각 2줄. 그 진영 3개 기사가 오늘 무엇에 무게를 실었는지 요약합니다. 줄당 18~26자.
@@ -96,17 +91,20 @@ def _news_card(card: NewsCard, index: int, side: str) -> Dict[str, Any]:
         "side": "Left" if side == "left" else "Right",
         "index": index,
         "title": card.title,
-        "lines": card.sentences,
+        "body": card.body.rstrip().rstrip("."),
     }
 
 
-def _short_lines(script: "Script") -> List[str]:
-    """한 문장을 여러 항목에 쪼개 담으면 항목이 짧아진다. 그런 항목을 모아 재작성을 요청한다."""
+BODY_MIN = 100
+BODY_MAX = 165
+
+
+def _bad_bodies(script: "Script") -> List[str]:
+    """분량이 어긋나거나 직접 줄을 나눈 본문을 모아 재작성을 요청한다."""
     return [
-        sentence
+        f"{card.title} ({len(card.body)}자)"
         for card in script.left_cards + script.right_cards
-        for sentence in card.sentences
-        if len(sentence) < 18
+        if not BODY_MIN <= len(card.body) <= BODY_MAX or "\n" in card.body
     ]
 
 
@@ -126,7 +124,7 @@ def generate_script(news_data: Dict[str, List[Dict[str, str]]]) -> List[Dict[str
     ]
 
     script = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             completion = client.beta.chat.completions.parse(
                 model="gpt-4o-2024-08-06",
@@ -138,21 +136,21 @@ def generate_script(news_data: Dict[str, List[Dict[str, str]]]) -> List[Dict[str
             return []
 
         script = completion.choices[0].message.parsed
-        short_lines = _short_lines(script)
-        if not short_lines:
+        bad_bodies = _bad_bodies(script)
+        if not bad_bodies:
             break
 
-        logger.info(f"Retrying: {len(short_lines)} lines are too short (attempt {attempt + 1})")
+        logger.info(f"Retrying: {len(bad_bodies)} bodies are off-spec (attempt {attempt + 1})")
         messages += [
             {"role": "assistant", "content": completion.choices[0].message.content},
             {
                 "role": "user",
                 "content": (
-                    "아래 항목들은 18자 미만이고 혼자서는 뜻이 통하지 않습니다. "
-                    "한 문장을 여러 항목에 쪼개 담았다는 뜻입니다.\n"
-                    + "\n".join(f"- {line}" for line in short_lines)
-                    + "\n\n조각들을 합쳐 20~26자의 완결된 문장으로 만들고, 모자란 문장은 "
-                    "기사 본문에서 새 내용을 가져와 채우세요. 전체를 다시 출력하세요."
+                    f"아래 카드의 body가 규격을 벗어났습니다. body는 줄바꿈 없는 한 문단이고 "
+                    f"공백 포함 {BODY_MIN}~{BODY_MAX}자여야 합니다.\n"
+                    + "\n".join(f"- {line}" for line in bad_bodies)
+                    + "\n\n짧으면 기사 본문에서 배경이나 반응을 더 가져와 채우고, 길면 곁가지를 덜어내세요. "
+                    "문장을 토막내 나열하지 말고 연결어로 이어 한 문단으로 흐르게 쓰세요. 전체를 다시 출력하세요."
                 ),
             },
         ]

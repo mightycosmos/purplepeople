@@ -60,22 +60,19 @@
     </div>
 
 {% else %}
-    <div id="body-block" class="absolute left-[90px] right-[70px] top-[350px] bottom-[120px]">
+    <div id="body-block" class="absolute left-[90px] right-[70px] top-[350px] bottom-[120px] overflow-hidden">
         <h1 class="text-white font-extrabold text-[68px] leading-[1.3] tracking-[-0.035em] break-keep">{{ title }}</h1>
-        <div id="lines" class="mt-[70px] text-white font-semibold text-[46px] leading-[1.85] tracking-[-0.02em]">
-            {% for line in lines %}<div class="whitespace-nowrap">{{ line }}</div>{% endfor %}
-        </div>
+        <p id="body" class="mt-[70px] text-white font-semibold text-[46px] leading-[1.85] tracking-[-0.02em] break-keep">{{ body }}</p>
     </div>
     <script>
-        // 한 줄이 곧 한 문장이므로 접히면 안 된다. 가장 긴 줄이 들어갈 때까지 본문을 줄인다.
+        // 본문은 한 문단이라 줄바꿈 위치는 브라우저에 맡긴다. 블록 밖으로 넘치면 글자를 줄인다.
         (function () {
-            const lines = document.getElementById('lines');
-            const overflows = () =>
-                [...lines.children].some((line) => line.scrollWidth > lines.clientWidth);
+            const block = document.getElementById('body-block');
+            const body = document.getElementById('body');
             let size = 46;
-            while (overflows() && size > 30) {
+            while (block.scrollHeight > block.clientHeight && size > 30) {
                 size -= 1;
-                lines.style.fontSize = size + 'px';
+                body.style.fontSize = size + 'px';
             }
         })();
     </script>
