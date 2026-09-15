@@ -29,7 +29,12 @@ CLOSING_FOOTER = "여러분의 생각을 적어주세요"
 
 
 class NewsCard(BaseModel):
-    title: str = Field(description="기사 제목처럼 쓴 우리만의 헤드라인. 언론사명 금지.")
+    title: str = Field(
+        description=(
+            "제목만 읽어도 무슨 일인지 알 수 있는 헤드라인. 누가 무엇을 했는지가 드러나야 한다. "
+            "14~22자. 언론사명 금지."
+        )
+    )
     body: str = Field(
         description=(
             "줄바꿈 없는 한 문단. 문장 3~5개가 자연스럽게 이어지며 전체 110~130자다. "
@@ -55,7 +60,16 @@ SYSTEM_PROMPT = """당신은 시사 카드뉴스 'Purple People'의 에디터입
 - 좌우 어느 쪽도 편들지 말고, 해당 기사가 실제로 말한 내용만 씁니다. 없는 사실을 지어내지 마세요.
 
 left_cards / right_cards (각 3장, 입력 순서 그대로)
-- title: 기사 제목처럼 압축한 우리만의 헤드라인. 12~18자. 마침표 없음.
+- title: 제목만 읽어도 무슨 일인지 알 수 있는 헤드라인. 14~22자. 마침표 없음.
+  * 누가(무엇이) 무엇을 했는지 또는 무슨 일이 벌어졌는지가 반드시 드러나야 합니다.
+  * 주제만 가리키는 추상적인 제목은 금지입니다. '논란', '사연', '이슈'로 얼버무리지 마세요.
+  * 본문을 안 읽어도 제목에서 사건이 그려져야 합니다.
+
+  나쁜 예 → 좋은 예
+    "지적장애 가족의 비극적 사연" → "중랑구 지적장애 형제 숨진 채 발견"
+    "대미투자금 MOU 변경 논란" → "대미투자 MOU '45일' 문구 뒤바뀌어"
+    "삼성운용, 불공정거래 조사 착수" → "금감원, 삼성운용 차명계좌 의혹 조사"
+    "경기도 '돌봄의료' 현장 방문" → "추미애, 찾아가는 돌봄의료 현장 점검"
 - body: 줄바꿈 없는 한 문단으로 씁니다. 카드에서 줄은 알아서 나뉘므로 직접 끊지 마세요.
   * 공백 포함 110~130자. 문장 3~5개가 모여 하나의 문단이 됩니다.
   * 무슨 일이 있었는지로 시작해 '이로 인해', '그러나', '반면' 같은 연결어로 배경과 반응을 잇고,
@@ -101,17 +115,27 @@ def _news_card(card: NewsCard, index: int, side: str) -> Dict[str, Any]:
     }
 
 
+TITLE_MIN = 14
+TITLE_MAX = 24
 BODY_MIN = 100
 BODY_MAX = 165
 
 
-def _bad_bodies(script: "Script") -> List[str]:
-    """분량이 어긋나거나 직접 줄을 나눈 본문을 모아 재작성을 요청한다."""
-    return [
-        f"{card.title} ({len(card.body)}자)"
-        for card in script.left_cards + script.right_cards
-        if not BODY_MIN <= len(card.body) <= BODY_MAX or "\n" in card.body
-    ]
+def _violations(script: "Script") -> List[str]:
+    """규격을 벗어난 제목·본문을 모아 재작성을 요청한다."""
+    problems = []
+    for card in script.left_cards + script.right_cards:
+        if not TITLE_MIN <= len(card.title) <= TITLE_MAX:
+            problems.append(
+                f"제목 '{card.title}'는 {len(card.title)}자 — {TITLE_MIN}~{TITLE_MAX}자로, "
+                "누가 무엇을 했는지 드러나게 다시 쓰세요"
+            )
+        if not BODY_MIN <= len(card.body) <= BODY_MAX or "\n" in card.body:
+            problems.append(
+                f"'{card.title}' 본문은 {len(card.body)}자 — 줄바꿈 없는 "
+                f"{BODY_MIN}~{BODY_MAX}자 한 문단이어야 합니다"
+            )
+    return problems
 
 
 def generate_script(news_data: Dict[str, List[Dict[str, str]]]) -> List[Dict[str, Any]]:
@@ -142,21 +166,21 @@ def generate_script(news_data: Dict[str, List[Dict[str, str]]]) -> List[Dict[str
             return []
 
         script = completion.choices[0].message.parsed
-        bad_bodies = _bad_bodies(script)
-        if not bad_bodies:
+        problems = _violations(script)
+        if not problems:
             break
 
-        logger.info(f"Retrying: {len(bad_bodies)} bodies are off-spec (attempt {attempt + 1})")
+        logger.info(f"Retrying: {len(problems)} cards are off-spec (attempt {attempt + 1})")
         messages += [
             {"role": "assistant", "content": completion.choices[0].message.content},
             {
                 "role": "user",
                 "content": (
-                    f"아래 카드의 body가 규격을 벗어났습니다. body는 줄바꿈 없는 한 문단이고 "
-                    f"공백 포함 {BODY_MIN}~{BODY_MAX}자여야 합니다.\n"
-                    + "\n".join(f"- {line}" for line in bad_bodies)
-                    + "\n\n짧으면 기사 본문에서 배경이나 반응을 더 가져와 채우고, 길면 곁가지를 덜어내세요. "
-                    "문장을 토막내 나열하지 말고 연결어로 이어 한 문단으로 흐르게 쓰세요. 전체를 다시 출력하세요."
+                    "아래 항목이 규격을 벗어났습니다.\n"
+                    + "\n".join(f"- {line}" for line in problems)
+                    + "\n\n제목은 '논란', '사연', '이슈' 같은 말로 얼버무리지 말고 주체와 사건을 넣으세요. "
+                    "본문이 짧으면 기사에서 배경이나 반응을 더 가져와 채우고, 길면 곁가지를 덜어내세요. "
+                    "전체를 다시 출력하세요."
                 ),
             },
         ]

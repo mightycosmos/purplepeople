@@ -1,0 +1,43 @@
+name: Daily Card News
+
+on:
+  schedule:
+    # GitHub Actions는 UTC로 돈다. 23:00 UTC = 다음 날 08:00 KST.
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Generate and send card news
+        env:
+          # 러너는 UTC라 23:00에 돌면 date.today()가 어제로 잡힌다. 한국 날짜를 쓰게 맞춘다.
+          TZ: Asia/Seoul
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py --keep-images
+
+      - name: Upload cards as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cards
+          path: output/
+          if-no-files-found: ignore
+          retention-days: 7
