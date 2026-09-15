@@ -137,6 +137,24 @@ def extract_article_body(url: str, max_chars: int = 4000) -> str:
     return best[:max_chars]
 
 
+# 메인 뉴스로 보기 어려운 연성 기사. 피드 최상단이 스포츠·연예면 다음 기사로 넘어간다.
+SOFT_CATEGORIES = (
+    "스포츠", "야구", "축구", "골프", "배구", "농구", "연예", "방송", "영화", "음악",
+    "문화", "책", "만화", "웹툰", "게임", "여행", "음식", "패션", "사는이야기",
+    "칼럼", "사설", "오피니언", "날씨", "포토", "사진",
+)
+SOFT_URL_PATTERN = re.compile(
+    r"(star\.ohmynews|/sports?/|/entertainments?/|/culture/|/life/|/travel/|/photo/|/opinion/)",
+    re.IGNORECASE,
+)
+
+
+def _is_hard_news(categories: List[str], link: str) -> bool:
+    if SOFT_URL_PATTERN.search(link):
+        return False
+    return not any(soft in category for category in categories for soft in SOFT_CATEGORIES)
+
+
 def _dedupe_title(title: str) -> str:
     """메인 페이지 링크는 썸네일용 제목과 본제목이 겹쳐 같은 문장이 두 번 잡힌다."""
     title = re.sub(r"\s+", " ", title).strip()
@@ -152,15 +170,15 @@ def _top_link_from_rss(source: Dict[str, str]) -> Optional[Dict[str, str]]:
         return None
 
     soup = BeautifulSoup(response.content, "xml")
-    item = soup.find("item")
-    if item is None:
-        return None
-
-    title = item.title.get_text(strip=True) if item.title else ""
-    link = item.link.get_text(strip=True) if item.link else ""
-    if not link:
-        return None
-    return {"title": title, "link": link}
+    for item in soup.find_all("item"):
+        link = item.link.get_text(strip=True) if item.link else ""
+        if not link:
+            continue
+        categories = [tag.get_text(strip=True) for tag in item.find_all("category")]
+        if not _is_hard_news(categories, link):
+            continue
+        return {"title": item.title.get_text(strip=True) if item.title else "", "link": link}
+    return None
 
 
 def _top_link_from_html(source: Dict[str, str]) -> Optional[Dict[str, str]]:
