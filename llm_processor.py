@@ -18,10 +18,11 @@ PURPLE = "#412C93"
 BLUE = "#1A3A8C"
 RED = "#9B1B21"
 
+COVER_HEADLINE = "오늘도 당신의 알고리즘은\n반대편 뉴스를 숨겼습니다"
 COVER_SUBLINES = [
     "편향의 시대를 향한 평범한 저항",
-    "오늘 하루, 좌우 언론의",
-    "엇갈린 메인 뉴스를 대조해드립니다",
+    "오늘 하루, 좌우 언론의 엇갈린 메인 뉴스를",
+    "Purple People이 대조해드립니다",
 ]
 CLOSING_TITLE = "편향이 느껴지시나요?"
 CLOSING_FOOTER = "여러분의 생각을 적어주세요"
@@ -33,7 +34,6 @@ class NewsCard(BaseModel):
 
 
 class Script(BaseModel):
-    cover_headline: str = Field(description="표지 후킹 문구.")
     left_cards: List[NewsCard] = Field(min_length=3, max_length=3)
     right_cards: List[NewsCard] = Field(min_length=3, max_length=3)
     closing_left: List[str] = Field(description="좌측 매체들이 오늘 무엇에 주목했는지 2줄.", min_length=2, max_length=2)
@@ -49,18 +49,23 @@ SYSTEM_PROMPT = """당신은 시사 카드뉴스 'Purple People'의 에디터입
 - 원 기사 제목을 그대로 베끼지 마세요. 같은 사실을 우리 말로 다시 쓴 헤드라인을 만듭니다.
 - 좌우 어느 쪽도 편들지 말고, 해당 기사가 실제로 말한 내용만 씁니다. 없는 사실을 지어내지 마세요.
 
-cover_headline
-- 오늘 양 진영 메인 뉴스를 관통하는 한 줄 후킹 문구. 20~26자.
-- 예: "오늘도 당신의 알고리즘은 반대편 뉴스를 숨겼습니다"
-
 left_cards / right_cards (각 3장, 입력 순서 그대로)
 - title: 기사 제목처럼 압축한 우리만의 헤드라인. 12~18자. 마침표 없음.
-- lines: 정확히 5줄.
-  * 각 줄은 14~22자의 짧은 문장이며 줄 끝에 마침표를 찍지 않습니다.
+- lines: 정확히 5줄. 한 줄은 '한 문장'입니다. 한 문장을 여러 줄에 쪼개 담지 마세요.
+  * 각 줄은 공백 포함 20~28자입니다. 18자 미만이면 실패로 간주합니다.
+  * 각 줄은 반드시 서술어로 끝납니다. 명사나 조사로 끝나면 안 됩니다.
+    (…했다 / …된다 / …않다 / …이다 / …지만 / …으며 처럼 끝내세요.)
+  * 줄 끝에 마침표를 찍지 않습니다.
   * 5줄을 위에서 아래로 읽으면 하나의 완결된 글이 되어야 합니다.
     1줄은 무슨 일인지, 2~3줄은 '이로 인해', '그러나', '반면' 같은 연결어로 배경과 반응을 잇고,
     4~5줄은 앞을 받아 쟁점이나 전망으로 닫습니다.
   * 같은 말을 되풀이하거나 사실을 뚝뚝 끊어 나열하지 마세요.
+
+  나쁜 예 (한 문장을 세 줄로 쪼갬, 명사로 끝남)
+    "김승원 후보자가 동물" / "실험 자료 조작 의혹에" / "문과 출신이라 해명했다"
+  좋은 예 (줄마다 한 문장이 끝남)
+    "김승원 후보자가 동물실험 자료 조작 의혹에 휩싸였다"
+    "그는 문과 출신이라 성능을 알 수 없었다고 해명했다"
 
 closing_left / closing_right
 - 각 2줄. 그 진영 3개 기사가 오늘 무엇에 무게를 실었는지 요약합니다. 줄당 18~26자.
@@ -81,9 +86,20 @@ def _news_card(card: NewsCard, page: int, side: str) -> Dict[str, Any]:
         "kind": "news",
         "page": page,
         "bg": BLUE if side == "left" else RED,
+        "side": "Left" if side == "left" else "Right",
         "title": card.title,
         "lines": card.lines,
     }
+
+
+def _short_lines(script: "Script") -> List[str]:
+    """한 문장을 여러 줄로 쪼개면 줄이 짧아진다. 그런 줄을 모아 재작성을 요청한다."""
+    return [
+        line
+        for card in script.left_cards + script.right_cards
+        for line in card.lines
+        if len(line) < 18
+    ]
 
 
 def generate_script(news_data: Dict[str, List[Dict[str, str]]]) -> List[Dict[str, Any]]:
@@ -96,27 +112,47 @@ def generate_script(news_data: Dict[str, List[Dict[str, str]]]) -> List[Dict[str
         f"[우파 매체 메인 뉴스]\n{_format_side(news_data['right'])}"
     )
 
-    try:
-        completion = client.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format=Script,
-        )
-    except Exception as exc:
-        logger.error(f"Error during LLM processing: {exc}")
-        return []
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
-    script = completion.choices[0].message.parsed
+    script = None
+    for attempt in range(2):
+        try:
+            completion = client.beta.chat.completions.parse(
+                model="gpt-4o-2024-08-06",
+                messages=messages,
+                response_format=Script,
+            )
+        except Exception as exc:
+            logger.error(f"Error during LLM processing: {exc}")
+            return []
+
+        script = completion.choices[0].message.parsed
+        short_lines = _short_lines(script)
+        if not short_lines:
+            break
+
+        logger.info(f"Retrying: {len(short_lines)} lines are too short (attempt {attempt + 1})")
+        messages += [
+            {"role": "assistant", "content": completion.choices[0].message.content},
+            {
+                "role": "user",
+                "content": (
+                    "아래 줄들이 18자 미만이라 한 문장을 여러 줄로 쪼갠 상태입니다:\n"
+                    + "\n".join(f"- {line}" for line in short_lines)
+                    + "\n\n모든 줄을 20~28자의 완결된 문장으로 다시 써서 전체를 새로 출력하세요."
+                ),
+            },
+        ]
 
     cards: List[Dict[str, Any]] = [
         {
             "kind": "cover",
             "page": 1,
             "bg": PURPLE,
-            "headline": script.cover_headline,
+            "headline": COVER_HEADLINE,
             "sublines": COVER_SUBLINES,
         }
     ]
