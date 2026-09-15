@@ -1,96 +1,222 @@
+import json
+import logging
+import re
+from typing import Dict, List, Optional
+
 import requests
 from bs4 import BeautifulSoup
-import logging
-import urllib.parse
-from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-# 언론사 구글 검색 사이트 매핑
-MEDIA_SITES = {
-    'left': {
-        '한겨레': 'hani.co.kr',
-        '경향신문': 'khan.co.kr',
-        '오마이뉴스': 'ohmynews.com'
-    },
-    'right': {
-        '조선일보': 'chosun.com',
-        '중앙일보': 'joongang.co.kr',
-        '동아일보': 'donga.com'
-    }
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9",
 }
 
-def get_article_by_site(keyword: str, site: str, max_articles: int = 1) -> List[Dict[str, str]]:
-    """Google News RSS를 통해 특정 사이트에서 키워드 검색 후 최신 기사를 가져옵니다."""
-    query = f"{keyword} site:{site}"
-    encoded_query = urllib.parse.quote(query)
-    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
-    
-    articles = []
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'xml')
-        
-        items = soup.find_all('item')
-        for item in items:
-            if len(articles) >= max_articles:
-                break
-                
-            title = item.title.text if item.title else ''
-            # 구글 뉴스는 title 끝에 " - 언론사명" 이 붙는 경우가 많음
-            if " - " in title:
-                title = title.rsplit(" - ", 1)[0]
-                
-            link = item.link.text if item.link else ''
-            desc = item.description.text if item.description else title
-            
-            # HTML 태그 제거
-            desc_soup = BeautifulSoup(desc, 'html.parser')
-            clean_desc = desc_soup.get_text(separator=' ', strip=True)
-            
-            articles.append({
-                'title': title.strip(),
-                'content': clean_desc,
-                'link': link
-            })
-    except Exception as e:
-        logger.error(f"Error scraping articles for site {site}: {e}")
-        
-    return articles
+# 각 언론사 메인 뉴스 수집 경로. RSS가 없는 곳은 메인 페이지를 직접 파싱한다.
+MEDIA_SOURCES = {
+    "left": [
+        {"name": "한겨레", "kind": "rss", "url": "https://www.hani.co.kr/rss/"},
+        {"name": "경향신문", "kind": "rss", "url": "https://www.khan.co.kr/rss/rssdata/total_news.xml"},
+        {"name": "오마이뉴스", "kind": "rss", "url": "https://rss.ohmynews.com/rss/ohmynews.xml"},
+    ],
+    "right": [
+        {
+            "name": "조선일보",
+            "kind": "rss",
+            "url": "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml",
+        },
+        {
+            "name": "중앙일보",
+            "kind": "html",
+            "url": "https://www.joongang.co.kr/",
+            "link_pattern": r"^https://www\.joongang\.co\.kr/article/\d+$",
+        },
+        {"name": "동아일보", "kind": "rss", "url": "https://rss.donga.com/total.xml"},
+    ],
+}
 
-def scrape_news(keyword: str) -> Dict[str, List[Dict[str, str]]]:
-    """좌파 및 우파 언론사에서 키워드에 대한 기사를 수집합니다."""
-    logger.info(f"Scraping news for keyword: {keyword} using Google News RSS")
-    results = {'left': [], 'right': []}
-    
-    # 좌파 매체 수집
-    for media_name, site in MEDIA_SITES['left'].items():
-        logger.info(f"Scraping {media_name} (Left)...")
-        articles = get_article_by_site(keyword, site, max_articles=1)
-        if articles:
-            article = articles[0]
-            article['media'] = media_name
-            results['left'].append(article)
-            
-    # 우파 매체 수집
-    for media_name, site in MEDIA_SITES['right'].items():
-        logger.info(f"Scraping {media_name} (Right)...")
-        articles = get_article_by_site(keyword, site, max_articles=1)
-        if articles:
-            article = articles[0]
-            article['media'] = media_name
-            results['right'].append(article)
-            
+BODY_SELECTORS = [
+    "div.article-text",
+    "div.text",
+    "#articleBody",
+    ".art_body",
+    ".at_contents",
+    "section.article-body",
+    '[itemprop="articleBody"]',
+    "#article_body",
+    ".news_view",
+    "#news_body_area",
+    "article",
+]
+
+NOISE_PATTERNS = [
+    r"무단\s*전재",
+    r"재배포\s*금지",
+    r"저작권자",
+    r"기자\s*$",
+    r"^\s*\[.*?\]\s*$",
+    r"구독하기",
+    r"관련기사",
+    r"^\s*ⓒ",
+]
+
+
+def _fetch(url: str, timeout: int = 15) -> Optional[requests.Response]:
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=timeout)
+        response.raise_for_status()
+        return response
+    except Exception as exc:
+        logger.warning(f"Fetch failed for {url}: {exc}")
+        return None
+
+
+def _clean_paragraphs(raw_text: str) -> str:
+    """기사 본문에서 저작권 고지·기자 서명 등 잡음을 걷어내고 문단으로 다시 묶는다."""
+    paragraphs = []
+    for line in raw_text.split("\n"):
+        line = re.sub(r"\s+", " ", line).strip()
+        if len(line) < 20:
+            continue
+        if any(re.search(pattern, line) for pattern in NOISE_PATTERNS):
+            continue
+        paragraphs.append(line)
+    return "\n".join(paragraphs)
+
+
+def _extract_fusion_body(html: str) -> str:
+    """조선일보 등 Arc Fusion 기반 사이트는 본문이 JS 전역 변수 안에 들어 있다."""
+    match = re.search(r"Fusion\.globalContent\s*=\s*(\{.*?\});", html, re.S)
+    if not match:
+        return ""
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return ""
+    texts = [
+        BeautifulSoup(element.get("content", ""), "html.parser").get_text(" ", strip=True)
+        for element in payload.get("content_elements", [])
+        if element.get("type") == "text"
+    ]
+    return _clean_paragraphs("\n".join(texts))
+
+
+def extract_article_body(url: str, max_chars: int = 4000) -> str:
+    """기사 URL에서 본문 전문을 추출한다."""
+    response = _fetch(url)
+    if response is None:
+        return ""
+
+    fusion_body = _extract_fusion_body(response.text)
+    if len(fusion_body) > 200:
+        return fusion_body[:max_chars]
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    for tag in soup(["script", "style", "aside", "nav", "footer", "figcaption"]):
+        tag.decompose()
+
+    best = ""
+    for selector in BODY_SELECTORS:
+        for node in soup.select(selector):
+            text = _clean_paragraphs(node.get_text(separator="\n"))
+            if len(text) > len(best):
+                best = text
+        if len(best) > 400:
+            break
+
+    if len(best) < 200:
+        fallback = "\n".join(p.get_text(separator=" ") for p in soup.find_all("p"))
+        candidate = _clean_paragraphs(fallback)
+        if len(candidate) > len(best):
+            best = candidate
+
+    return best[:max_chars]
+
+
+def _dedupe_title(title: str) -> str:
+    """메인 페이지 링크는 썸네일용 제목과 본제목이 겹쳐 같은 문장이 두 번 잡힌다."""
+    title = re.sub(r"\s+", " ", title).strip()
+    half = len(title) // 2
+    if len(title) % 2 == 1 and title[half] == " " and title[:half] == title[half + 1 :]:
+        return title[:half]
+    return title
+
+
+def _top_link_from_rss(source: Dict[str, str]) -> Optional[Dict[str, str]]:
+    response = _fetch(source["url"])
+    if response is None:
+        return None
+
+    soup = BeautifulSoup(response.content, "xml")
+    item = soup.find("item")
+    if item is None:
+        return None
+
+    title = item.title.get_text(strip=True) if item.title else ""
+    link = item.link.get_text(strip=True) if item.link else ""
+    if not link:
+        return None
+    return {"title": title, "link": link}
+
+
+def _top_link_from_html(source: Dict[str, str]) -> Optional[Dict[str, str]]:
+    response = _fetch(source["url"])
+    if response is None:
+        return None
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    pattern = re.compile(source["link_pattern"])
+    for anchor in soup.find_all("a", href=True):
+        if not pattern.match(anchor["href"]):
+            continue
+        title = _dedupe_title(anchor.get_text(separator=" ", strip=True))
+        if len(title) < 8:
+            continue
+        return {"title": title, "link": anchor["href"]}
+    return None
+
+
+def fetch_main_article(source: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """한 언론사의 메인 뉴스 한 건을 제목·본문과 함께 가져온다."""
+    head = _top_link_from_rss(source) if source["kind"] == "rss" else _top_link_from_html(source)
+    if head is None:
+        logger.warning(f"No main article found for {source['name']}")
+        return None
+
+    body = extract_article_body(head["link"])
+    if len(body) < 150:
+        logger.warning(f"Body too short for {source['name']} ({len(body)} chars)")
+
+    return {
+        "media": source["name"],
+        "title": head["title"],
+        "link": head["link"],
+        "content": body,
+    }
+
+
+def scrape_main_news() -> Dict[str, List[Dict[str, str]]]:
+    """좌/우 언론사의 메인 뉴스를 각각 수집한다."""
+    results: Dict[str, List[Dict[str, str]]] = {"left": [], "right": []}
+    for side, sources in MEDIA_SOURCES.items():
+        for source in sources:
+            logger.info(f"Fetching main news from {source['name']} ({side})")
+            article = fetch_main_article(source)
+            if article:
+                results[side].append(article)
     return results
 
+
 if __name__ == "__main__":
-    import sys
     logging.basicConfig(level=logging.INFO)
-    if len(sys.argv) > 1:
-        keyword = sys.argv[1]
-        data = scrape_news(keyword)
-        for side, side_articles in data.items():
-            print(f"--- {side.upper()} ---")
-            for a in side_articles:
-                print(f"[{a['media']}] {a['title']}\n{a['content'][:100]}...\n")
+    data = scrape_main_news()
+    for side, articles in data.items():
+        print(f"===== {side.upper()} =====")
+        for article in articles:
+            print(f"[{article['media']}] {article['title']}")
+            print(f"  link: {article['link']}")
+            print(f"  body({len(article['content'])}): {article['content'][:200]}...\n")

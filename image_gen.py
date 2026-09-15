@@ -41,7 +41,8 @@ def generate_images(script: list, output_dir: str = 'output') -> list:
                     media=card.get('media', ''),
                     title=card.get('title', ''),
                     desc=card.get('desc', ''),
-                    side=side
+                    side=side,
+                    page=idx + 1
                 )
                 
                 # 페이지 로드 및 스크린샷 캡처
